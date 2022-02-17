@@ -98,8 +98,11 @@ use std::io;
 use std::io::prelude::*;
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
+use std::task::Context;
+use std::task::Poll;
 use std::thread::JoinHandle;
 
 #[cfg(not(windows))]
@@ -110,6 +113,9 @@ use std::os::windows::prelude::*;
 /// Unix-specific extensions to duct, for sending signals.
 #[cfg(unix)]
 pub mod unix;
+
+use tokio::io::AsyncRead;
+use tokio::io::ReadBuf;
 
 // enums defined below
 use ExpressionInner::*;
@@ -2048,6 +2054,40 @@ impl Read for ReaderHandle {
     /// error, just as [`run`](struct.Expression.html#method.run) would.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         (&*self).read(buf)
+    }
+}
+
+impl<'a> AsyncRead for &'a ReaderHandle {
+    /// Note that if you don't use
+    /// [`unchecked`](struct.Expression.html#method.unchecked), and the child
+    /// returns a non-zero exit status, the final call to `read` will return an
+    /// error, just as [`run`](struct.Expression.html#method.run) would.
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        let b = buf.filled_mut();
+        let n = (&self.reader).read(b)?;
+        if n == 0 && b.len() > 0 {
+            // EOF detected. Wait on the child to clean it up before returning.
+            self.handle.wait()?;
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncRead for ReaderHandle {
+    /// Note that if you don't use
+    /// [`unchecked`](struct.Expression.html#method.unchecked), and the child
+    /// returns a non-zero exit status, the final call to `read` will return an
+    /// error, just as [`run`](struct.Expression.html#method.run) would.
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut (&*self)).poll_read(cx, buf)
     }
 }
 

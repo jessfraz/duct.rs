@@ -14,6 +14,7 @@ edition = "2018"
 os_pipe = "1.0.0"
 shared_child = "1.0.0"
 once_cell = "1.0.1"
+tokio = { version = "1", features = ["full"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.43"
